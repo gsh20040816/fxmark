@@ -85,9 +85,15 @@ static int main_work(struct worker *worker)
 	while (!bench->stop) {
 		dir = opendir(dir_path);
 		if (!dir) goto err_out;
-		for (; !bench->stop; ++iter) {
+		for (; !bench->stop;) {
 			rc = readdir_r(dir, &entry, &result);
-			if (rc) goto err_out;
+			if (rc) {
+				closedir(dir);
+				goto out;
+			}
+			if (!result)
+				break;
+			++iter;
 		}
 		closedir(dir);
 	}
