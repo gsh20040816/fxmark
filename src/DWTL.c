@@ -31,49 +31,88 @@ static void set_test_file(struct worker *worker,
             fx_opt->root, worker->id);
 }
 
+static int open_test_file(struct worker *worker, int flags)
+{
+    char path[PATH_MAX];
+
+    set_test_file(worker, path);
+    return open(path, flags | O_RDWR | O_LARGEFILE, S_IRWXU);
+}
+
 static int pre_work(struct worker *worker)
 {
     struct bench *bench =  worker->bench;
-    char path[PATH_MAX];
-    int fd=-1, rc = 0;
+    int fds[bench->ncpu];
+    int fd=-1, i, rc = 0;
     char *page = NULL;
+    volatile uint64_t *pre_done = &bench->workers[0].private[2];
 
-    /* allocate data buffer aligned with pagesize*/                    
-    if(posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE)) 
-      goto err_out;                                                    
-    page = worker->page;                                               
-    if (!page)                                                         
-      goto err_out;                                                    
+    for (i = 0; i < bench->ncpu; ++i)
+      fds[i] = -1;
 
-    /* time to create large file */
-    set_test_file(worker, path);
-    if ((fd = open(path, O_CREAT | O_RDWR | O_LARGEFILE, S_IRWXU)) == -1) {
+    if(posix_memalign((void **)&page, PAGE_SIZE, PAGE_SIZE))
+      goto err_out;
+    if (!page)
+      goto err_out;
+
+    if (worker->id == 0) {
+      for (i = 0; i < bench->ncpu; ++i) {
+        struct worker *w = &bench->workers[i];
+        fds[i] = open_test_file(w, O_CREAT);
+        if (fds[i] == -1) {
+          rc = errno;
+          goto err_out;
+        }
+        if (bench->directio && (fcntl(fds[i], F_SETFL, O_DIRECT)==-1)) {
+          rc = errno;
+          goto err_out;
+        }
+      }
+
+      for (;;) {
+        for (i = 0; i < bench->ncpu; ++i) {
+          struct worker *w = &bench->workers[i];
+          rc = write(fds[i], page, PAGE_SIZE);
+          if (rc != PAGE_SIZE)
+            rc = errno == ENOSPC ? ENOSPC : errno;
+          else
+            rc = 0;
+          if (rc == ENOSPC) {
+            rc = 0;
+            goto open_for_main;
+          }
+          if (rc)
+            goto err_out;
+          ++w->private[0];
+        }
+      }
+open_for_main:
+      *pre_done = 1;
+    } else {
+      while (!*pre_done && !bench->stop)
+        usleep(1000);
+      if (bench->stop)
+        goto err_out;
+    }
+
+    fd = open_test_file(worker, 0);
+    if (fd == -1) {
       rc = errno;
       goto err_out;
     }
-
-    /*set flag with O_DIRECT if necessary*/                   
-    if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1)) 
-      goto err_out;                                           
-
-    for(;;++worker->private[0]) {
-      rc = write(fd, page, PAGE_SIZE);
-      if (rc != PAGE_SIZE) {
-        if (errno == ENOSPC) {
-          --worker->private[0];
-          rc = 0;
-          goto out;
-        }
-        goto err_out;
-      }
-    }
+    goto out;
 err_out:
+    if (fd != -1)
+      close(fd);
     bench->stop = 1;
- out:
+out:
+    for (i = 0; i < bench->ncpu; ++i) {
+      if (fds[i] != -1)
+        close(fds[i]);
+    }
     /*put fd to worker's private*/
     worker->private[1] = (uint64_t)fd;
     free(page);
-    worker->page=NULL;
     return rc;
 }
 #include <string.h>

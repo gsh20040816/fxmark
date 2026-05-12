@@ -31,31 +31,53 @@ static void set_test_file(struct worker *worker,
             fx_opt->root, worker->id, file_id);
 }
 
+static int create_test_file(struct worker *worker, uint64_t file_id)
+{
+    char path[PATH_MAX];
+    int fd;
+
+    set_test_file(worker, file_id, path);
+    fd = open(path, O_CREAT | O_RDWR, S_IRWXU);
+    if (fd == -1)
+        return errno;
+    close(fd);
+    return 0;
+}
+
 static int pre_work(struct worker *worker)
 {
     struct bench *bench =  worker->bench;
     char path[PATH_MAX];
-    int fd, rc = 0;
+    int i, rc = 0;
 
-    /* creating private directory */
-    set_test_root(worker, path);
-    rc = mkdir_p(path);
-    if (rc)
-        goto err_out;
+    if (worker->id != 0)
+        return 0;
 
-    /* time to create files */
-    for (;; ++worker->private[0]) {
-        set_test_file(worker, worker->private[0], path);
-        if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
-            if (errno == ENOSPC) {
-                --worker->private[0];
-		rc = 0;
+    for (i = 0; i < bench->ncpu; ++i) {
+        struct worker *w = &bench->workers[i];
+        set_test_root(w, path);
+        rc = mkdir_p(path);
+        if (rc)
+            goto err_out;
+    }
+
+    /* a leader serializes pre-work across workers to avoid setup contention */
+    for (;;) {
+        int made_progress = 0;
+        for (i = 0; i < bench->ncpu; ++i) {
+            struct worker *w = &bench->workers[i];
+            rc = create_test_file(w, w->private[0]);
+            if (rc == ENOSPC) {
+                rc = 0;
                 goto out;
             }
-            rc = errno;
-            goto err_out;
+            if (rc)
+                goto err_out;
+            ++w->private[0];
+            made_progress = 1;
         }
-        close(fd);
+        if (!made_progress)
+            goto out;
     }
  err_out:
     bench->stop = 1;
