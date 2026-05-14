@@ -82,9 +82,10 @@ static void worker_main(void *arg)
 {
         struct worker *worker = (struct worker*)arg;
         struct bench *bench = worker->bench;
-        uint64_t s_clk = 1, s_us = 1;
+        uint64_t s_clk = 0, s_us = 0;
         uint64_t e_clk = 0, e_us = 0;
         int err = 0;
+        int timed = 0;
 
         /* set affinity */ 
         setaffinity(worker->id);
@@ -106,8 +107,15 @@ static void worker_main(void *arg)
 		int i;
 		for (i = 1; i < bench->ncpu; i++) {
 			struct worker *w = &bench->workers[i];
-			while (!w->ready)
+			while (!w->ready) {
+				if (w->ret) {
+					err = w->ret;
+					bench->stop = 1;
+					bench->start = 1;
+					goto err_out;
+				}
 				nop_pause();
+			}
 		}
 		/* make things more deterministic */
 		sync();
@@ -130,12 +138,14 @@ static void worker_main(void *arg)
         /* start time */
         s_clk = rdtsc_beg();
         s_us = usec();
+        timed = 1;
 
         /* main work */
         if (bench->ops.main_work) {
                 err = bench->ops.main_work(worker);
                 if (err && err != ENOSPC)
                         goto err_out;
+                err = 0;
         }
 
         /* end time */ 
@@ -150,10 +160,18 @@ static void worker_main(void *arg)
         if (bench->ops.post_work)
                 err = bench->ops.post_work(worker);
 err_out:
+        if (timed && !e_us) {
+                e_clk = rdtsc_end();
+                e_us = usec();
+        }
+        if (err) {
+                bench->stop = 1;
+                bench->start = 1;
+        }
         worker->ret = err;
-        worker->usecs = e_us - s_us;
+        worker->usecs = timed ? e_us - s_us : 0;
         wmb();
-        worker->clocks = e_clk - s_clk;
+        worker->clocks = timed ? e_clk - s_clk : 1;
 }
 
 static void wait(struct bench *bench)
@@ -176,8 +194,10 @@ void run_bench(struct bench *bench)
 		 * of linux virtual memory subsystem. 
 		 */ 
 		pid_t p = fork();
-		if (p < 0)
+		if (p < 0) {
 			bench->workers[i].ret = errno;
+			bench->workers[i].clocks = 1;
+		}
 		else if (!p) {
 			worker_main(&bench->workers[i]);
 			exit(0);
@@ -194,7 +214,7 @@ void report_bench(struct bench *bench, FILE *out)
         double   total_works = 0.0;
         double   avg_secs;
 	char *profile_name, *profile_data;
-        int i, n_fg_cpu;
+        int i, n_fg_cpu, failed = 0;
 
         /* if report_bench is overloaded */ 
         if (bench->ops.report_bench) {
@@ -205,11 +225,20 @@ void report_bench(struct bench *bench, FILE *out)
         /* default report_bench impl. */
         for (i = 0; i < bench->ncpu; ++i) {
                 struct worker *w = &bench->workers[i];
+		if (w->ret) {
+			fprintf(out, "# error worker=%d errno=%d (%s)\n",
+				w->id, w->ret, strerror(w->ret));
+			failed = 1;
+		}
 		if (w->is_bg) continue;
                 total_usecs += w->usecs;
                 total_works += w->works;
         }
 	n_fg_cpu = bench->ncpu - bench->nbg;
+	if (failed) {
+		fprintf(out, "# fxmark failed before producing valid metrics\n");
+		return;
+	}
         avg_secs = (double)total_usecs/(double)n_fg_cpu/1000000.0;
 
 	/* get profiling result */ 
