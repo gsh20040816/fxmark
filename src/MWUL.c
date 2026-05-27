@@ -48,6 +48,46 @@ static int pre_work(struct worker *worker)
 {
     struct bench *bench =  worker->bench;
     char path[PATH_MAX];
+    uint64_t file_id, file_count;
+    int i, rc = 0;
+
+    if (worker->id != 0)
+        return 0;
+
+    for (i = 0; i < bench->ncpu; ++i) {
+        struct worker *w = &bench->workers[i];
+        set_test_root(w, path);
+        rc = mkdir_p(path);
+        if (rc)
+            goto err_out;
+    }
+
+    /* a leader serializes pre-work across workers to avoid setup contention */
+    file_count = fxmark_fixed_work_items_for_worker(
+        bench,
+        "FXMARK_FIXED_FILE_COUNT_TOTAL",
+        FXMARK_FIXED_FILE_COUNT_TOTAL,
+        "FXMARK_FIXED_FILE_COUNT_PER_WORKER");
+    for (file_id = 0; file_id < file_count; ++file_id) {
+        for (i = 0; i < bench->ncpu; ++i) {
+            struct worker *w = &bench->workers[i];
+            rc = create_test_file(w, w->private[0]);
+            if (rc)
+                goto err_out;
+            ++w->private[0];
+        }
+    }
+ out:
+    return rc;
+ err_out:
+    bench->stop = 1;
+    goto out;
+}
+
+static int pre_work_enospc(struct worker *worker)
+{
+    struct bench *bench =  worker->bench;
+    char path[PATH_MAX];
     int i, rc = 0;
 
     if (worker->id != 0)
@@ -108,5 +148,10 @@ static int main_work(struct worker *worker)
 
 struct bench_operations u_file_rm_ops = {
     .pre_work  = pre_work,
+    .main_work = main_work,
+};
+
+struct bench_operations u_file_rm_enospc_ops = {
+    .pre_work  = pre_work_enospc,
     .main_work = main_work,
 };

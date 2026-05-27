@@ -69,6 +69,9 @@ class Runner(object):
             "MWUM",
             "MWUL",
             "DWTL",
+            "MWUM_ENOSPC",
+            "MWUL_ENOSPC",
+            "DWTL_ENOSPC",
 
             # filebench
             "filebench_varmail",

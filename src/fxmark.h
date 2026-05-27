@@ -50,7 +50,10 @@ extern struct bench_operations n_path_rsl_bg_ops;
 extern struct bench_operations n_spath_rsl_ops;
 extern struct bench_operations u_file_cr_ops;
 extern struct bench_operations u_file_rm_ops;
+extern struct bench_operations u_file_rm_enospc_ops;
 extern struct bench_operations u_sh_file_rm_ops;
+extern struct bench_operations u_sh_file_rm_enospc_ops;
 extern struct bench_operations u_file_tr_ops;
+extern struct bench_operations u_file_tr_enospc_ops;
 
 #endif /* __FX_H__ */

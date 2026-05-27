@@ -39,12 +39,13 @@ static int open_test_file(struct worker *worker, int flags)
     return open(path, flags | O_RDWR | O_LARGEFILE, S_IRWXU);
 }
 
-static int pre_work(struct worker *worker)
+static int pre_work_impl(struct worker *worker, int until_enospc)
 {
     struct bench *bench =  worker->bench;
     int fds[bench->ncpu];
     int fd=-1, i, rc = 0;
     char *page = NULL;
+    uint64_t page_id, page_count;
     volatile uint64_t *pre_done = &bench->workers[0].private[2];
 
     for (i = 0; i < bench->ncpu; ++i)
@@ -69,21 +70,42 @@ static int pre_work(struct worker *worker)
         }
       }
 
-      for (;;) {
-        for (i = 0; i < bench->ncpu; ++i) {
-          struct worker *w = &bench->workers[i];
-          rc = write(fds[i], page, PAGE_SIZE);
-          if (rc != PAGE_SIZE)
-            rc = errno == ENOSPC ? ENOSPC : errno;
-          else
-            rc = 0;
-          if (rc == ENOSPC) {
-            rc = 0;
-            goto open_for_main;
+      if (until_enospc) {
+        for (;;) {
+          for (i = 0; i < bench->ncpu; ++i) {
+            struct worker *w = &bench->workers[i];
+            rc = write(fds[i], page, PAGE_SIZE);
+            if (rc != PAGE_SIZE)
+              rc = errno == ENOSPC ? ENOSPC : errno;
+            else
+              rc = 0;
+            if (rc == ENOSPC) {
+              rc = 0;
+              goto open_for_main;
+            }
+            if (rc)
+              goto err_out;
+            ++w->private[0];
           }
-          if (rc)
-            goto err_out;
-          ++w->private[0];
+        }
+      } else {
+        page_count = fxmark_fixed_work_items_for_worker(
+            bench,
+            "FXMARK_FIXED_TRUNCATE_PAGES_TOTAL",
+            FXMARK_FIXED_TRUNCATE_PAGE_TOTAL,
+            "FXMARK_FIXED_TRUNCATE_PAGES_PER_WORKER");
+        for (page_id = 0; page_id < page_count; ++page_id) {
+          for (i = 0; i < bench->ncpu; ++i) {
+            struct worker *w = &bench->workers[i];
+            rc = write(fds[i], page, PAGE_SIZE);
+            if (rc != PAGE_SIZE)
+              rc = errno == ENOSPC ? ENOSPC : errno;
+            else
+              rc = 0;
+            if (rc)
+              goto err_out;
+            ++w->private[0];
+          }
         }
       }
 open_for_main:
@@ -114,6 +136,16 @@ out:
     worker->private[1] = (uint64_t)fd;
     free(page);
     return rc;
+}
+
+static int pre_work(struct worker *worker)
+{
+    return pre_work_impl(worker, 0);
+}
+
+static int pre_work_enospc(struct worker *worker)
+{
+    return pre_work_impl(worker, 1);
 }
 #include <string.h>
 
@@ -146,5 +178,10 @@ static int main_work(struct worker *worker)
 
 struct bench_operations u_file_tr_ops = {
     .pre_work  = pre_work,
+    .main_work = main_work,
+};
+
+struct bench_operations u_file_tr_enospc_ops = {
+    .pre_work  = pre_work_enospc,
     .main_work = main_work,
 };
