@@ -10,8 +10,13 @@
 
 int mkdir_p(const char *path);
 
+#ifndef FXMARK_FIXED_FILE_COUNT_TOTAL
 #define FXMARK_FIXED_FILE_COUNT_TOTAL 983040ULL
+#endif
+
+#ifndef FXMARK_FIXED_TRUNCATE_PAGE_TOTAL
 #define FXMARK_FIXED_TRUNCATE_PAGE_TOTAL 1048576ULL
+#endif
 
 inline static uint64_t fxmark_u64_env_or(const char *name, uint64_t fallback)
 {

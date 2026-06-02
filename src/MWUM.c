@@ -58,6 +58,10 @@ static int pre_work(struct worker *worker)
         for (i = 0; i < bench->ncpu; ++i) {
             struct worker *w = &bench->workers[i];
             rc = create_test_file(w, w->private[0]);
+            if (rc == ENOSPC) {
+                rc = 0;
+                goto out;
+            }
             if (rc)
                 goto err_out;
             ++w->private[0];

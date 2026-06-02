@@ -102,6 +102,10 @@ static int pre_work_impl(struct worker *worker, int until_enospc)
               rc = errno == ENOSPC ? ENOSPC : errno;
             else
               rc = 0;
+            if (rc == ENOSPC) {
+              rc = 0;
+              goto open_for_main;
+            }
             if (rc)
               goto err_out;
             ++w->private[0];
@@ -152,7 +156,7 @@ static int pre_work_enospc(struct worker *worker)
 static int main_work(struct worker *worker)
 {
     struct bench *bench = worker->bench;
-    uint64_t iter;
+    uint64_t iter, initial_pages, completed = 0;
     int fd, rc = 0;
     char path[PATH_MAX];
     set_test_file(worker, path);
@@ -160,15 +164,20 @@ static int main_work(struct worker *worker)
     /*get file */
     fd = (int)worker->private[1];
 
-    for (iter = --worker->private[0]; iter > 0 && !bench->stop; --iter) {
+    initial_pages = worker->private[0];
+    if (initial_pages == 0)
+      goto out;
+
+    for (iter = initial_pages - 1; iter > 0 && !bench->stop; --iter) {
       if (ftruncate(fd, iter * PAGE_SIZE) == -1) {
         rc = errno;
         goto err_out;
       }
+      ++completed;
     }
  out:
     close(fd);
-    worker->works = (double)(worker->private[0] - iter);
+    worker->works = (double)completed;
     return rc;
  err_out:
     bench->stop = 1;
