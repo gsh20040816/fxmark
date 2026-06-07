@@ -13,6 +13,51 @@
 #include "cpupol.h"
 #include "rdtsc.h"
 
+#ifndef CXLFS_ENABLE_FXMARK_TSC_TIMING_RESET
+#define CXLFS_ENABLE_FXMARK_TSC_TIMING_RESET 0
+#endif
+
+#if CXLFS_ENABLE_FXMARK_TSC_TIMING_RESET
+#include <dlfcn.h>
+
+typedef void (*cxlfs_fxmark_tsc_timing_hook_t)(void);
+
+static void cxlfs_fxmark_call_tsc_timing_hook_if_available(
+	const char *symbol,
+	cxlfs_fxmark_tsc_timing_hook_t *hook,
+	int *resolved)
+{
+	if (!*resolved) {
+		*hook = (cxlfs_fxmark_tsc_timing_hook_t)dlsym(RTLD_DEFAULT, symbol);
+		*resolved = 1;
+	}
+	if (*hook != NULL)
+		(*hook)();
+}
+
+static void cxlfs_fxmark_reset_tsc_timing_if_available(void)
+{
+	static cxlfs_fxmark_tsc_timing_hook_t hook;
+	static int resolved;
+
+	cxlfs_fxmark_call_tsc_timing_hook_if_available(
+		"cxlfs_fxmark_reset_tsc_timing_current_thread",
+		&hook,
+		&resolved);
+}
+
+static void cxlfs_fxmark_finish_tsc_timing_if_available(void)
+{
+	static cxlfs_fxmark_tsc_timing_hook_t hook;
+	static int resolved;
+
+	cxlfs_fxmark_call_tsc_timing_hook_if_available(
+		"cxlfs_fxmark_finish_tsc_timing_current_thread",
+		&hook,
+		&resolved);
+}
+#endif
+
 static struct bench *running_bench;
 
 static uint64_t usec(void)
@@ -91,13 +136,17 @@ static void worker_main(void *arg)
         setaffinity(worker->id);
 
         /* pre-work */
-        if (bench->ops.pre_work) {
-                err = bench->ops.pre_work(worker);
-                if (err) goto err_out;
-        }
+	        if (bench->ops.pre_work) {
+	                err = bench->ops.pre_work(worker);
+	                if (err) goto err_out;
+	        }
 
-        /* wait for start signal */ 
-        worker->ready = 1;
+#if CXLFS_ENABLE_FXMARK_TSC_TIMING_RESET
+	        cxlfs_fxmark_reset_tsc_timing_if_available();
+#endif
+
+	        /* wait for start signal */
+	        worker->ready = 1;
         if (worker->id) {
                 while (!bench->start)
                         nop_pause();
@@ -148,13 +197,17 @@ static void worker_main(void *arg)
                 err = 0;
         }
 
-        /* end time */ 
-        e_clk = rdtsc_end();
-        e_us = usec();
+	        /* end time */
+	        e_clk = rdtsc_end();
+	        e_us = usec();
 
-	/* stop performance profiling */
-        if (!worker->id && bench->profile_stop_cmd[0])
-		system(bench->profile_stop_cmd);
+#if CXLFS_ENABLE_FXMARK_TSC_TIMING_RESET
+	        cxlfs_fxmark_finish_tsc_timing_if_available();
+#endif
+
+		/* stop performance profiling */
+	        if (!worker->id && bench->profile_stop_cmd[0])
+			system(bench->profile_stop_cmd);
 
         /* post-work */ 
         if (bench->ops.post_work)
