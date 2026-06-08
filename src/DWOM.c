@@ -42,9 +42,10 @@ static int pre_work(struct worker *worker)
         /* allocate data buffer aligned with pagesize*/
         if(posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE))
                 goto err_out;
-        page = worker->page;
-        if (!page)
-                goto err_out;
+	page = worker->page;
+	if (!page)
+	        goto err_out;
+	fxmark_init_write_page(page, (uint64_t)worker->id);
 
 #if DEBUG
         /*to debug*/
@@ -117,11 +118,12 @@ static int main_work(struct worker *worker)
         if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1))
                 goto err_out;
 
-        pos = PRIVATE_REGION_SIZE * worker->id;
-        for (iter = 0; !bench->stop; ++iter) {
-                if (pwrite(fd, page, PAGE_SIZE, pos) != PAGE_SIZE)
-                        goto err_out;
-        }
+	pos = PRIVATE_REGION_SIZE * worker->id;
+	for (iter = 0; !bench->stop; ++iter) {
+	        fxmark_set_write_page_stamp(page, (uint64_t)worker->id, iter + 1);
+	        if (pwrite(fd, page, PAGE_SIZE, pos) != PAGE_SIZE)
+	                goto err_out;
+	}
         close(fd);
 out:
         worker->works = (double)iter;

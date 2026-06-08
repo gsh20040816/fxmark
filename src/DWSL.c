@@ -46,6 +46,7 @@ static int pre_work(struct worker *worker)
 	page = worker->page;
 	if (!page)
 		goto err_out;
+	fxmark_init_write_page(page, (uint64_t)worker->id);
 
 	/*set flag with O_DIRECT if need*/
 	if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1))
@@ -76,6 +77,7 @@ static int main_work(struct worker *worker)
 	/* fsync */
 	fd = (int)worker->private[0];
 	for (iter = 0; !bench->stop; ++iter) {
+	        fxmark_set_write_page_stamp(page, (uint64_t)worker->id, iter + 1);
 	        if (pwrite(fd, page, PAGE_SIZE, 0) != PAGE_SIZE)
 			goto err_out;
 		if (fsync(fd) == -1)

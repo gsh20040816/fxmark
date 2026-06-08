@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "bench.h"
 
@@ -67,6 +68,21 @@ inline static unsigned int pseudo_random(unsigned int x_n)
 	 *   http://en.wikipedia.org/wiki/Linear_congruential_generator 
 	 */
 	return 1103515245 * x_n + 12345;
+}
+
+inline static void fxmark_set_write_page_stamp(char *page, uint64_t worker_id, uint64_t iter)
+{
+	uint64_t stamp[2];
+
+	stamp[0] = worker_id;
+	stamp[1] = iter;
+	memcpy(page, stamp, sizeof(stamp));
+}
+
+inline static void fxmark_init_write_page(char *page, uint64_t worker_id)
+{
+	memset(page, 0, PAGE_SIZE);
+	fxmark_set_write_page_stamp(page, worker_id, 0);
 }
 
 #endif /* __UTIL_H__ */
