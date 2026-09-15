@@ -23,6 +23,23 @@ $  make clean
 
 ## How to run
 
+### Directory scan diagnostics
+
+MRDL/MRDM accept three compile-time options through `make DEFS='...'`:
+
+- `CXLFS_FXMARK_DIRECTORY_PRECREATE_FILES=N`: create exactly N files per worker;
+  0 keeps the original timed preparation. Fixed preparation reports allocation
+  failure instead of accepting a shorter directory.
+- `CXLFS_ENABLE_FXMARK_PRECREATE_REPORT=1`: report prepared files, directory opens,
+  completed scans and returned entries.
+- `CXLFS_FXMARK_DIRECTORY_SCAN_PASSES=N`: require N complete scans and validate
+  the entry count, including `.` and `..`. This mode requires `--ncore=1
+  --nbg=0`; other worker configurations report EINVAL. The duration is a timeout,
+  and incomplete scans report ETIMEDOUT.
+
+All options default to 0. Keep diagnostic binaries separate from binaries used
+for timed performance comparisons; changing DEFS requires rebuilding the target.
+
 - Benchmark configuration
     - Set target media paths at bin/run-fxmark.py (e.g., Runner.LOOPDEV)
     - Set configuration for each run at bin/run-fxmark.py (i.e., run_config)
