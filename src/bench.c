@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -227,19 +228,11 @@ err_out:
         worker->clocks = timed ? e_clk - s_clk : 1;
 }
 
-static void wait(struct bench *bench)
-{
-        int i;
-        for (i = 0; i < bench->ncpu; i++) {
-                struct worker *w = &bench->workers[i];
-                while (!w->clocks)
-                        nop_pause();
-        }
-}
-
 void run_bench(struct bench *bench)
 {
         int i;
+	pid_t children[bench->ncpu];
+	memset(children, 0, sizeof(children));
 	for (i = 1; i < bench->ncpu; ++i) {
 		/**
 		 * fork() is intentionally used instead of pthread
@@ -247,6 +240,7 @@ void run_bench(struct bench *bench)
 		 * of linux virtual memory subsystem. 
 		 */ 
 		pid_t p = fork();
+		children[i] = p;
 		if (p < 0) {
 			bench->workers[i].ret = errno;
 			bench->workers[i].clocks = 1;
@@ -257,7 +251,24 @@ void run_bench(struct bench *bench)
 		}
 	}
 	worker_main(&bench->workers[0]);
-	wait(bench);
+	/* Completion counters precede exit handlers. Reap workers before reporting
+	 * success so a crash during filesystem teardown cannot produce valid data.
+	 * Worker timers have already stopped; this does not change measured work. */
+	for (i = 1; i < bench->ncpu; ++i) {
+		int status;
+		pid_t waited;
+		if (children[i] <= 0)
+			continue;
+		do {
+			waited = waitpid(children[i], &status, 0);
+		} while (waited < 0 && errno == EINTR);
+		if (waited < 0) {
+			bench->workers[i].ret = errno;
+		} else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			bench->workers[i].ret = EIO;
+			fprintf(stderr, "# error worker=%d exit-status=%d\n", i, status);
+		}
+	}
 }
 
 void report_bench(struct bench *bench, FILE *out)
